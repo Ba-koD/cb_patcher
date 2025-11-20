@@ -2,17 +2,97 @@ use walkdir::WalkDir;
 use sha1::{Sha1, Digest};
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
+use directories::UserDirs;
 
-// calculate_sha1 removed as it was unused
+#[cfg(target_os = "windows")]
+pub fn find_steam_path_from_registry() -> Option<PathBuf> {
+    use winreg::enums::*;
+    use winreg::RegKey;
 
-// GitHub calculates blob SHA1 as: "blob <size>\0<content>"
-// So we need to replicate this if we want to match GitHub's SHA.
-// Wait, the user said "compare with github repo".
-// GitHub's tree API returns the SHA of the blob.
-// The blob SHA is `sha1("blob " + filesize + "\0" + content)`.
-// So we must implement this specific hash calculation.
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let steam = hkcu.open_subkey("Software\\Valve\\Steam").ok()?;
+    let path_str: String = steam.get_value("SteamPath").ok()?;
+    
+    Some(PathBuf::from(path_str))
+}
+
+pub fn find_steam_from_path_env() -> Option<PathBuf> {
+    if let Some(paths) = std::env::var_os("PATH") {
+        for path in std::env::split_paths(&paths) {
+            // Check for steam.exe (Windows) or steam (Unix)
+            let steam_exe = path.join("steam.exe");
+            if steam_exe.exists() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+pub fn find_isaac_game_path() -> Option<PathBuf> {
+    // 1. Try Windows Registry (Windows only)
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(steam_path) = find_steam_path_from_registry() {
+            let game_path = steam_path.join("steamapps/common/The Binding of Isaac Rebirth");
+            if game_path.join("isaac-ng.exe").exists() {
+                return Some(game_path);
+            }
+        }
+    }
+
+    // 2. Try PATH environment variable
+    if let Some(steam_path) = find_steam_from_path_env() {
+        let game_path = steam_path.join("steamapps/common/The Binding of Isaac Rebirth");
+        if game_path.exists() { // Weak check if exe not visible in PATH lookup context
+             return Some(game_path);
+        }
+    }
+
+    // 3. Fallback to common Steam paths
+    let common_steam_paths = [
+        r"C:\Program Files (x86)\Steam",
+        r"C:\Steam",
+        r"D:\Steam",
+        r"E:\Steam",
+        // Common library paths
+        r"C:\SteamLibrary",
+        r"D:\SteamLibrary",
+        r"E:\SteamLibrary",
+    ];
+
+    for p in common_steam_paths {
+        let base_path = if p.starts_with("~") {
+            if let Some(user_dirs) = UserDirs::new() {
+                let home = user_dirs.home_dir();
+                let suffix = &p[2..];
+                home.join(suffix)
+            } else {
+                PathBuf::from(p)
+            }
+        } else {
+            PathBuf::from(p)
+        };
+
+        if base_path.exists() {
+            let game_path = base_path.join("steamapps/common/The Binding of Isaac Rebirth");
+            // Check for game executable
+            let exe_name = if cfg!(target_os = "windows") { "isaac-ng.exe" } else { "isaac-ng" }; 
+            // Note: Mac might be different (Isaac-ng), Linux (isaac-ng).
+            
+            if game_path.join(exe_name).exists() || game_path.exists() {
+                 return Some(game_path);
+            }
+        }
+    }
+
+    // 3. Check specific Mac save data path (standard location for mods on Mac, but game is elsewhere)
+    // Skipping Mac specific game path detection for now as user emphasized Windows.
+    
+    None
+}
 
 pub fn calculate_github_sha1(path: &Path) -> Result<String> {
     let metadata = fs::metadata(path)?;

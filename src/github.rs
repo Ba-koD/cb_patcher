@@ -16,6 +16,7 @@ pub struct TreeResponse {
     pub tree: Vec<TreeItem>,
 }
 
+#[derive(Clone)]
 pub struct GitHubClient {
     client: Client,
     owner: String,
@@ -53,5 +54,21 @@ impl GitHubClient {
             .header("Accept", "application/vnd.github.v3.raw")
             .send()?;
         Ok(resp.bytes()?.to_vec())
+    }
+
+    pub fn fetch_metadata_id(&self, branch: &str) -> Result<String> {
+        let url = format!(
+            "https://raw.githubusercontent.com/{}/{}/{}/metadata.xml",
+            self.owner, self.repo, branch
+        );
+        let content = self.client.get(&url).send()?.text()?;
+        
+        #[derive(Deserialize)]
+        struct Metadata {
+            id: String,
+        }
+        
+        let metadata: Metadata = quick_xml::de::from_str(&content)?;
+        Ok(metadata.id)
     }
 }

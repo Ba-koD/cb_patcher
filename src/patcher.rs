@@ -18,8 +18,16 @@ impl Patcher {
         }
     }
 
-    pub fn sync(&self, branch: &str) -> Result<()> {
-        println!("Fetching remote tree...");
+    pub fn sync<F>(&self, branch: &str, logger: Option<F>) -> Result<()> 
+    where F: Fn(String) {
+        let log = |msg: String| {
+            if let Some(f) = &logger {
+                f(msg.clone());
+            }
+            println!("{}", msg);
+        };
+
+        log("Fetching remote tree...".to_string());
         let remote_tree = self.client.fetch_tree(branch)?;
         
         // Filter remote tree to only include blobs (files)
@@ -29,7 +37,7 @@ impl Patcher {
             .map(|item| (item.path.clone(), item))
             .collect();
 
-        println!("Scanning local files...");
+        log("Scanning local files...".to_string());
         let local_files_list = scan_local_files(&self.mod_path)?;
         let local_files: HashMap<String, String> = local_files_list.into_iter().collect();
 
@@ -40,11 +48,11 @@ impl Patcher {
         for (path, item) in &remote_files {
             if let Some(local_sha) = local_files.get(path) {
                 if local_sha != &item.sha {
-                    println!("Changed: {}", path);
+                    log(format!("Changed: {}", path));
                     to_download.push(item);
                 }
             } else {
-                println!("New: {}", path);
+                log(format!("New: {}", path));
                 to_download.push(item);
             }
         }
@@ -52,30 +60,30 @@ impl Patcher {
         // Check for files to delete (present locally but not remotely)
         for (path, _) in &local_files {
             if !remote_files.contains_key(path) {
-                println!("Extra: {}", path);
+                log(format!("Extra: {}", path));
                 to_delete.push(path);
             }
         }
 
         if to_download.is_empty() && to_delete.is_empty() {
-            println!("Already up to date.");
+            log("Already up to date.".to_string());
             return Ok(());
         }
 
-        println!("Plan: {} to download, {} to delete.", to_download.len(), to_delete.len());
+        log(format!("Plan: {} to download, {} to delete.", to_download.len(), to_delete.len()));
 
         // Execute deletions
         for path in to_delete {
             let full_path = self.mod_path.join(path);
             if full_path.exists() {
                 fs::remove_file(&full_path)?;
-                println!("Deleted: {}", path);
+                log(format!("Deleted: {}", path));
             }
         }
 
         // Execute downloads
         for item in to_download {
-            println!("Downloading: {}", item.path);
+            log(format!("Downloading: {}", item.path));
             let content = self.client.download_file(&item.url)?;
             let full_path = self.mod_path.join(&item.path);
             
@@ -86,7 +94,7 @@ impl Patcher {
             fs::write(&full_path, content)?;
         }
 
-        println!("Update complete!");
+        log("Update complete!".to_string());
         Ok(())
     }
 }
