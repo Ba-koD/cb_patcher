@@ -41,7 +41,15 @@ impl GitHubClient {
             "https://api.github.com/repos/{}/{}/git/trees/{}?recursive=1",
             self.owner, self.repo, branch
         );
-        let resp: TreeResponse = self.client.get(&url).send()?.json()?;
+        let resp = self.client.get(&url).send()?;
+        
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_default();
+            return Err(anyhow::anyhow!("GitHub API Error {}: {}", status, text));
+        }
+
+        let resp: TreeResponse = resp.json()?;
         Ok(resp.tree)
     }
 

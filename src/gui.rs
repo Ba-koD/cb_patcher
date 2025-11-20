@@ -144,68 +144,108 @@ impl PatcherApp {
 
 impl eframe::App for PatcherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Conch Blessing Patcher");
-            
-            ui.horizontal(|ui| {
-                ui.label("Game Path:");
-                if let Some(path) = &self.game_path {
-                    ui.label(path.to_string_lossy());
-                } else {
-                    ui.label("Not selected");
-                }
-                
-                if ui.button("Select Folder").clicked() {
-                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                        self.game_path = Some(folder.clone());
-                        let _ = save_config(&folder);
-                        self.check_mod_folder();
-                    }
-                }
-            });
+        // Global Style setup
+        let mut style = (*ctx.style()).clone();
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.visuals.widgets.inactive.rounding = egui::Rounding::same(4.0);
+        style.visuals.widgets.active.rounding = egui::Rounding::same(4.0);
+        style.visuals.widgets.hovered.rounding = egui::Rounding::same(4.0);
+        // Increase font size slightly
+        for (_, font_id) in style.text_styles.iter_mut() {
+            font_id.size *= 1.1;
+        }
+        ctx.set_style(style);
 
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(10.0);
+                ui.heading("🐚 Conch Blessing Patcher");
+                ui.label("Auto-update tool for The Binding of Isaac mod");
+                ui.add_space(20.0);
+            });
+            
+            egui::Grid::new("main_grid")
+                .num_columns(2)
+                .spacing([10.0, 15.0])
+                .striped(false)
+                .show(ui, |ui| {
+                    ui.label("📁 Game Path:");
+                    ui.horizontal(|ui| {
+                        if let Some(path) = &self.game_path {
+                            ui.label(path.to_string_lossy());
+                        } else {
+                            ui.colored_label(egui::Color32::RED, "Not selected");
+                        }
+                        if ui.button("Browse...").clicked() {
+                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                self.game_path = Some(folder.clone());
+                                let _ = save_config(&folder);
+                                self.check_mod_folder();
+                            }
+                        }
+                    });
+                    ui.end_row();
+
+                    ui.label("🎯 Target Mod:");
+                    if let Some(target) = &self.target_mod_path {
+                        ui.label(format!("✅ {:?}", target.file_name().unwrap()));
+                    } else {
+                        if self.game_path.is_some() {
+                            ui.horizontal(|ui| {
+                                ui.colored_label(egui::Color32::YELLOW, "Not found");
+                                if ui.button("🔄 Re-scan").clicked() {
+                                    self.check_mod_folder();
+                                }
+                            });
+                        } else {
+                            ui.label("Waiting for game path...");
+                        }
+                    }
+                    ui.end_row();
+                    
+                    ui.label("ℹ️ Status:");
+                    ui.label(&self.status_message);
+                    ui.end_row();
+                });
+
+            ui.add_space(20.0);
             ui.separator();
-            
-            if let Some(target) = &self.target_mod_path {
-                ui.label(format!("Target Mod: {:?}", target.file_name().unwrap()));
-            } else if self.game_path.is_some() {
-                ui.colored_label(egui::Color32::RED, &self.status_message);
-                if ui.button("Re-scan").clicked() {
-                    self.check_mod_folder();
-                }
-            }
-            
-            ui.separator();
-            
-            // Status
-            ui.label(&self.status_message);
-            
             ui.add_space(10.0);
-            
-            if matches!(self.state, AppState::Idle) && self.target_mod_path.is_some() {
-                if ui.button("Update / Patch").clicked() {
-                    self.start_patching();
-                }
-            } else if matches!(self.state, AppState::Syncing) {
-                ui.spinner();
-                ui.label("Patching in progress...");
-            }
-            
-            // Logs
-            let logs = self.progress_log.lock().unwrap();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for log in logs.iter() {
-                    ui.label(log);
+
+            ui.vertical_centered(|ui| {
+                if matches!(self.state, AppState::Syncing) {
+                    ui.spinner();
+                    ui.label("Downloading updates...");
+                } else if self.target_mod_path.is_some() {
+                    if ui.add_sized([200.0, 40.0], egui::Button::new("🚀 Update Now")).clicked() {
+                        self.start_patching();
+                    }
+                } else {
+                    ui.add_enabled(false, egui::Button::new("🚀 Update Now").min_size([200.0, 40.0].into()));
                 }
             });
+            
+            ui.add_space(20.0);
+            ui.separator();
+            ui.label("Log:");
+            
+            let logs = self.progress_log.lock().unwrap();
+            egui::ScrollArea::vertical()
+                .max_height(150.0)
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    for log in logs.iter() {
+                        ui.monospace(log);
+                    }
+                });
             
             if let Some(last) = logs.last() {
                 if last.contains("Update complete!") && matches!(self.state, AppState::Syncing) {
                     self.state = AppState::Done;
-                    self.status_message = "Update Successful!".to_string();
+                    self.status_message = "✨ Update Successful!".to_string();
                 } else if last.contains("Error:") && matches!(self.state, AppState::Syncing) {
                     self.state = AppState::Error("Failed".to_string());
-                    self.status_message = "Update Failed!".to_string();
+                    self.status_message = "❌ Update Failed!".to_string();
                 }
             }
         });
