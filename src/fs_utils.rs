@@ -94,6 +94,7 @@ pub fn find_isaac_game_path() -> Option<PathBuf> {
     None
 }
 
+#[allow(dead_code)]
 pub fn calculate_github_sha1(path: &Path) -> Result<String> {
     let metadata = fs::metadata(path)?;
     let size = metadata.len();
@@ -116,6 +117,7 @@ pub fn calculate_github_sha1(path: &Path) -> Result<String> {
     Ok(hex::encode(result))
 }
 
+#[allow(dead_code)]
 pub fn scan_local_files(root: &Path) -> Result<Vec<(String, String)>> {
     let mut files = Vec::new();
     for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {

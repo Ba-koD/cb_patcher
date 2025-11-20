@@ -3,6 +3,7 @@ use serde::Deserialize;
 use anyhow::Result;
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 pub struct TreeItem {
     pub path: String,
     #[serde(rename = "type")]
@@ -12,6 +13,7 @@ pub struct TreeItem {
 }
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 pub struct TreeResponse {
     pub tree: Vec<TreeItem>,
 }
@@ -36,6 +38,7 @@ impl GitHubClient {
         }
     }
 
+    #[allow(dead_code)]
     pub fn fetch_tree(&self, branch: &str) -> Result<Vec<TreeItem>> {
         let url = format!(
             "https://api.github.com/repos/{}/{}/git/trees/{}?recursive=1",
@@ -56,6 +59,7 @@ impl GitHubClient {
         Ok(resp.tree)
     }
 
+    #[allow(dead_code)]
     pub fn download_file(&self, url: &str) -> Result<Vec<u8>> {
         let resp = self.client.get(url)
             .header("Accept", "application/vnd.github.v3.raw")

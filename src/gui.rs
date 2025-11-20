@@ -65,51 +65,64 @@ impl PatcherApp {
         self.state = AppState::Checking;
         self.status_message = "Fetching metadata...".to_string();
         
-        match self.github_client.fetch_metadata_id(&self.repo_branch) {
-            Ok(id) => {
-                // Look for conch_blessing_{id}
-                let expected_name = format!("conch_blessing_{}", id);
-                let specific_path = mods_path.join(&expected_name);
-                
-                if specific_path.exists() {
-                    self.target_mod_path = Some(specific_path);
-                    self.status_message = format!("Found mod: {}", expected_name);
-                } else {
-                    // Fallback check: just "conch_blessing"?
-                    let fallback = mods_path.join("conch_blessing");
-                    if fallback.exists() {
-                        self.target_mod_path = Some(fallback);
-                        self.status_message = "Found mod: conch_blessing".to_string();
-                    } else {
-                        // Check for any conch_blessing_*
-                        if let Ok(entries) = std::fs::read_dir(&mods_path) {
-                            let mut found = None;
-                            for entry in entries.flatten() {
-                                let name = entry.file_name().to_string_lossy().to_string();
-                                if name.starts_with("conch_blessing") {
-                                    found = Some(mods_path.join(name));
-                                    break;
-                                }
-                            }
-                            if let Some(p) = found {
-                                self.target_mod_path = Some(p);
-                                self.status_message = "Found mod (generic match)".to_string();
-                            } else {
-                                self.target_mod_path = None;
-                                self.status_message = "Mod not found! Please install it first.".to_string();
-                            }
-                        }
-                    }
-                }
-            },
+        // Try to get ID from GitHub, but don't fail completely if network is down
+        let metadata_id = match self.github_client.fetch_metadata_id(&self.repo_branch) {
+            Ok(id) => Some(id),
             Err(e) => {
-                self.status_message = format!("Failed to fetch metadata: {}", e);
-                self.state = AppState::Error;
+                // Log error but continue to scan locally
+                self.status_message = format!("Metadata fetch failed (checking local): {}", e);
+                None
+            }
+        };
+
+        let mut found_path = None;
+        let mut found_msg = String::new();
+
+        // 1. If we have an ID, check the specific folder first
+        if let Some(id) = &metadata_id {
+            let expected_name = format!("conch_blessing_{}", id);
+            let specific_path = mods_path.join(&expected_name);
+            
+            if specific_path.exists() {
+                found_path = Some(specific_path);
+                found_msg = format!("Found mod: {}", expected_name);
             }
         }
-        
-        if self.target_mod_path.is_some() {
+
+        // 2. Fallback: Check generic "conch_blessing"
+        if found_path.is_none() {
+            let fallback = mods_path.join("conch_blessing");
+            if fallback.exists() {
+                found_path = Some(fallback);
+                found_msg = "Found mod: conch_blessing".to_string();
+            }
+        }
+
+        // 3. Fallback: Scan for any folder starting with "conch_blessing"
+        if found_path.is_none() {
+            if let Ok(entries) = std::fs::read_dir(&mods_path) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with("conch_blessing") {
+                        found_path = Some(mods_path.join(name));
+                        found_msg = "Found mod (generic match)".to_string();
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Update state based on findings
+        if let Some(p) = found_path {
+            self.target_mod_path = Some(p);
+            self.status_message = found_msg;
             self.state = AppState::Idle;
+        } else {
+            self.target_mod_path = None;
+            // Keep the metadata error message if we failed there, otherwise generic not found
+            if metadata_id.is_some() || !self.status_message.contains("Metadata fetch failed") {
+                self.status_message = "Mod not found! Please install it first.".to_string();
+            }
         }
     }
 
@@ -162,7 +175,7 @@ impl eframe::App for PatcherApp {
                         if let Some(path) = &self.game_path {
                             ui.label(path.to_string_lossy());
                         } else {
-                            ui.colored_label(egui::Color32::RED, "Not selected");
+                            ui.colored_label(egui::Color32::from_rgb(200, 80, 80), "Not selected");
                         }
                         if ui.button("Browse...").clicked() {
                             if let Some(folder) = rfd::FileDialog::new().pick_folder() {
@@ -180,7 +193,7 @@ impl eframe::App for PatcherApp {
                     } else {
                         if self.game_path.is_some() {
                             ui.horizontal(|ui| {
-                                ui.colored_label(egui::Color32::YELLOW, "Not found");
+                                ui.colored_label(egui::Color32::from_rgb(230, 150, 50), "Not found");
                                 if ui.button("🔄 Re-scan").clicked() {
                                     self.check_mod_folder();
                                 }
