@@ -1,9 +1,10 @@
-use crate::github::{GitHubClient, TreeItem};
-use crate::fs_utils::scan_local_files;
+use crate::github::GitHubClient;
 use std::path::PathBuf;
 use std::fs;
-use std::collections::HashMap;
+use std::io::{Cursor, Read};
+use std::collections::HashSet;
 use anyhow::Result;
+use zip::ZipArchive;
 
 pub struct Patcher {
     client: GitHubClient,
@@ -27,72 +28,110 @@ impl Patcher {
             println!("{}", msg);
         };
 
-        log("Fetching remote tree...".to_string());
-        let remote_tree = self.client.fetch_tree(branch)?;
+        log("Downloading repository archive...".to_string());
+        // This consumes only 1 API request (or minimal)
+        let zip_data = self.client.download_repo_zip(branch)?;
         
-        // Filter remote tree to only include blobs (files)
-        let remote_files: HashMap<String, &TreeItem> = remote_tree
-            .iter()
-            .filter(|item| item.item_type == "blob")
-            .map(|item| (item.path.clone(), item))
-            .collect();
+        log("Extracting and comparing...".to_string());
+        let cursor = Cursor::new(zip_data);
+        let mut archive = ZipArchive::new(cursor)?;
 
-        log("Scanning local files...".to_string());
-        let local_files_list = scan_local_files(&self.mod_path)?;
-        let local_files: HashMap<String, String> = local_files_list.into_iter().collect();
-
-        let mut to_download = Vec::new();
-        let mut to_delete = Vec::new();
-
-        // Check for files to download (new or changed)
-        for (path, item) in &remote_files {
-            if let Some(local_sha) = local_files.get(path) {
-                if local_sha != &item.sha {
-                    log(format!("Changed: {}", path));
-                    to_download.push(item);
+        // Find the root folder name in the zip (e.g. "Ba-koD-conch_blessing-123456/")
+        // It's usually the first entry's top-level directory.
+        let root_name = {
+            let mut name = String::new();
+            if archive.len() > 0 {
+                let file = archive.by_index(0)?;
+                let path = file.name();
+                if let Some(idx) = path.find('/') {
+                    name = path[..idx+1].to_string();
                 }
-            } else {
-                log(format!("New: {}", path));
-                to_download.push(item);
             }
-        }
+            name
+        };
 
-        // Check for files to delete (present locally but not remotely)
-        for (path, _) in &local_files {
-            if !remote_files.contains_key(path) {
-                log(format!("Extra: {}", path));
-                to_delete.push(path);
+        let mut processed_files = HashSet::new();
+
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i)?;
+            let file_name = file.name().to_string(); // Full path in zip
+
+            // Skip directories and files outside root (shouldn't happen)
+            if file.is_dir() || !file_name.starts_with(&root_name) {
+                continue;
             }
-        }
 
-        if to_download.is_empty() && to_delete.is_empty() {
-            log("Already up to date.".to_string());
-            return Ok(());
-        }
-
-        log(format!("Plan: {} to download, {} to delete.", to_download.len(), to_delete.len()));
-
-        // Execute deletions
-        for path in to_delete {
-            let full_path = self.mod_path.join(path);
-            if full_path.exists() {
-                fs::remove_file(&full_path)?;
-                log(format!("Deleted: {}", path));
+            // Strip root folder
+            let relative_path = &file_name[root_name.len()..];
+            if relative_path.is_empty() {
+                continue;
             }
-        }
 
-        // Execute downloads
-        for item in to_download {
-            log(format!("Downloading: {}", item.path));
-            let content = self.client.download_file(&item.url)?;
-            let full_path = self.mod_path.join(&item.path);
-            
-            if let Some(parent) = full_path.parent() {
+            // Skip .git files if any (zipball usually excludes .git dir but might include .gitignore)
+            if relative_path.starts_with(".git") {
+                continue;
+            }
+
+            let target_path = self.mod_path.join(relative_path);
+            processed_files.insert(target_path.clone());
+
+            // Create parent dirs
+            if let Some(parent) = target_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            
-            fs::write(&full_path, content)?;
+
+            // Read content
+            let mut content = Vec::new();
+            file.read_to_end(&mut content)?;
+
+            // Compare and write if different
+            let mut is_different = true;
+            if target_path.exists() {
+                if let Ok(local_content) = fs::read(&target_path) {
+                    if local_content == content {
+                        is_different = false;
+                    }
+                }
+            }
+
+            if is_different {
+                if target_path.exists() {
+                    log(format!("Updated: {}", relative_path));
+                } else {
+                    log(format!("New: {}", relative_path));
+                }
+                fs::write(&target_path, content)?;
+            }
         }
+
+        // Delete removed files
+        log("Cleaning up old files...".to_string());
+        // Walk dir and delete files not in processed_files
+        for entry in walkdir::WalkDir::new(&self.mod_path).into_iter().filter_map(|e| e.ok()) {
+            if entry.file_type().is_file() {
+                let path = entry.path().to_path_buf();
+                
+                // If the file is NOT in the new zip, delete it.
+                // But we must be careful not to delete user config files if they exist.
+                // For this mod patcher, we assume full sync.
+                
+                if !processed_files.contains(&path) {
+                    // Check if it's a file we should ignore?
+                    // e.g., ".DS_Store" or "Thumbs.db"
+                    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                    if file_name == ".DS_Store" || file_name == "Thumbs.db" {
+                        continue;
+                    }
+
+                    if let Ok(rel) = path.strip_prefix(&self.mod_path) {
+                         log(format!("Deleted: {}", rel.display()));
+                    }
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+        
+        // Clean empty directories (Optional, skipping for simplicity)
 
         log("Update complete!".to_string());
         Ok(())

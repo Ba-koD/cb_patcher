@@ -46,6 +46,9 @@ impl GitHubClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().unwrap_or_default();
+            if status.as_u16() == 403 && text.contains("rate limit") {
+                return Err(anyhow::anyhow!("GitHub API Rate Limit Exceeded. Please try again later."));
+            }
             return Err(anyhow::anyhow!("GitHub API Error {}: {}", status, text));
         }
 
@@ -54,13 +57,27 @@ impl GitHubClient {
     }
 
     pub fn download_file(&self, url: &str) -> Result<Vec<u8>> {
-        // The tree item URL is for the blob API, which returns JSON with base64 content or raw.
-        // However, for downloading, it's often easier to use the raw.githubusercontent.com URL 
-        // or the "Accept: application/vnd.github.v3.raw" header on the blob URL.
-        // Let's use the blob URL with the raw header.
         let resp = self.client.get(url)
             .header("Accept", "application/vnd.github.v3.raw")
             .send()?;
+        Ok(resp.bytes()?.to_vec())
+    }
+
+    pub fn download_repo_zip(&self, branch: &str) -> Result<Vec<u8>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/zipball/{}",
+            self.owner, self.repo, branch
+        );
+        let resp = self.client.get(&url).send()?;
+        
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_default();
+            if status.as_u16() == 403 && text.contains("rate limit") {
+                return Err(anyhow::anyhow!("GitHub API Rate Limit Exceeded. Please try again later."));
+            }
+             return Err(anyhow::anyhow!("Failed to download zip: {} - {}", status, text));
+        }
         Ok(resp.bytes()?.to_vec())
     }
 
