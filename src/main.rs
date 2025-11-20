@@ -6,7 +6,7 @@ use clap::Parser;
 use std::path::PathBuf;
 use std::io::{self, Write};
 use directories::UserDirs;
-use anyhow::{Result, Context};
+use anyhow::Result;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

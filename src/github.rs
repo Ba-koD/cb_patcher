@@ -5,7 +5,6 @@ use anyhow::Result;
 #[derive(Deserialize, Debug)]
 pub struct TreeItem {
     pub path: String,
-    pub mode: String,
     #[serde(rename = "type")]
     pub item_type: String,
     pub sha: String,
@@ -14,10 +13,7 @@ pub struct TreeItem {
 
 #[derive(Deserialize, Debug)]
 pub struct TreeResponse {
-    pub sha: String,
-    pub url: String,
     pub tree: Vec<TreeItem>,
-    pub truncated: bool,
 }
 
 pub struct GitHubClient {

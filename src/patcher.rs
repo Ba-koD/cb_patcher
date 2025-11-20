@@ -1,9 +1,9 @@
 use crate::github::{GitHubClient, TreeItem};
-use crate::fs_utils::{scan_local_files, calculate_github_sha1};
-use std::path::{Path, PathBuf};
+use crate::fs_utils::scan_local_files;
+use std::path::PathBuf;
 use std::fs;
-use std::collections::{HashMap, HashSet};
-use anyhow::{Result, Context};
+use std::collections::HashMap;
+use anyhow::Result;
 
 pub struct Patcher {
     client: GitHubClient,

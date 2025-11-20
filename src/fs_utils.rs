@@ -1,26 +1,11 @@
 use walkdir::WalkDir;
 use sha1::{Sha1, Digest};
 use std::fs::{self, File};
-use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::Path;
 use anyhow::{Context, Result};
 
-pub fn calculate_sha1(path: &Path) -> Result<String> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha1::new();
-    let mut buffer = [0; 1024];
-
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-
-    let result = hasher.finalize();
-    Ok(hex::encode(result))
-}
+// calculate_sha1 removed as it was unused
 
 // GitHub calculates blob SHA1 as: "blob <size>\0<content>"
 // So we need to replicate this if we want to match GitHub's SHA.
