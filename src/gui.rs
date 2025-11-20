@@ -13,7 +13,7 @@ enum AppState {
     Checking,
     Syncing,
     Done,
-    Error(String),
+    Error,
 }
 
 pub struct PatcherApp {
@@ -104,7 +104,7 @@ impl PatcherApp {
             },
             Err(e) => {
                 self.status_message = format!("Failed to fetch metadata: {}", e);
-                self.state = AppState::Error(e.to_string());
+                self.state = AppState::Error;
             }
         }
         
@@ -144,18 +144,6 @@ impl PatcherApp {
 
 impl eframe::App for PatcherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Global Style setup
-        let mut style = (*ctx.style()).clone();
-        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-        style.visuals.widgets.inactive.rounding = egui::Rounding::same(4.0);
-        style.visuals.widgets.active.rounding = egui::Rounding::same(4.0);
-        style.visuals.widgets.hovered.rounding = egui::Rounding::same(4.0);
-        // Increase font size slightly
-        for (_, font_id) in style.text_styles.iter_mut() {
-            font_id.size *= 1.1;
-        }
-        ctx.set_style(style);
-
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(10.0);
@@ -244,7 +232,7 @@ impl eframe::App for PatcherApp {
                     self.state = AppState::Done;
                     self.status_message = "✨ Update Successful!".to_string();
                 } else if last.contains("Error:") && matches!(self.state, AppState::Syncing) {
-                    self.state = AppState::Error("Failed".to_string());
+                    self.state = AppState::Error;
                     self.status_message = "❌ Update Failed!".to_string();
                 }
             }
@@ -261,7 +249,20 @@ pub fn run() -> eframe::Result<()> {
     eframe::run_native(
         "Conch Blessing Patcher",
         options,
-        Box::new(|_cc| Box::new(PatcherApp::default())),
+        Box::new(|cc| {
+            let mut style = (*cc.egui_ctx.style()).clone();
+            style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+            style.visuals.widgets.inactive.rounding = egui::Rounding::same(4.0);
+            style.visuals.widgets.active.rounding = egui::Rounding::same(4.0);
+            style.visuals.widgets.hovered.rounding = egui::Rounding::same(4.0);
+            // Increase font size slightly (only once)
+            for (_, font_id) in style.text_styles.iter_mut() {
+                font_id.size *= 1.1;
+            }
+            cc.egui_ctx.set_style(style);
+            
+            Box::new(PatcherApp::default())
+        }),
     )
 }
 
