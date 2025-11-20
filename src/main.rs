@@ -67,7 +67,6 @@ fn find_isaac_mods_path() -> Option<PathBuf> {
 
     // 3. Fallback to common Steam paths
     let common_steam_paths = [
-    let common_steam_paths = [
         r"C:\Program Files (x86)\Steam",
         r"C:\Steam",
         r"D:\Steam",
