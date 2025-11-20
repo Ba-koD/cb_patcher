@@ -15,7 +15,7 @@ anyhow = "1.0"
 hex = "0.4"
 eframe = "0.27"
 rfd = "0.14"
-quick-xml = { version = "0.31", features = ["serialize", "deserialize"] }
+quick-xml = { version = "0.31", features = ["serialize"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.50"
