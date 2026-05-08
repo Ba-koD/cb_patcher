@@ -80,6 +80,7 @@ enum ModUpdateStatus {
 #[derive(Clone, Debug)]
 struct PendingConfirmation {
     indices: Vec<usize>,
+    force_update: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -258,10 +259,12 @@ pub struct PatcherApp {
     app_id: u32,
     auto_update_enabled: bool,
     auto_update_exclusions: HashSet<u64>,
+    force_update_enabled: bool,
     show_log: bool,
     language_mode: LanguageMode,
     pending_confirmation: Option<PendingConfirmation>,
     pending_subscribe_notice: Option<PendingSubscribeNotice>,
+    show_force_update_notice: bool,
     shown_subscribe_notices: HashSet<u64>,
     search_query: String,
     details_cache: Arc<Mutex<HashMap<u64, WorkshopDetailsState>>>,
@@ -290,10 +293,12 @@ impl Default for PatcherApp {
             app_id: ISAAC_APP_ID,
             auto_update_enabled: load_auto_update().unwrap_or(true),
             auto_update_exclusions: load_auto_update_exclusions().unwrap_or_default(),
+            force_update_enabled: false,
             show_log: false,
             language_mode,
             pending_confirmation: None,
             pending_subscribe_notice: None,
+            show_force_update_notice: false,
             shown_subscribe_notices: HashSet::new(),
             search_query: String::new(),
             details_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -502,17 +507,22 @@ impl PatcherApp {
             self.status_message = self.t("select_workshop_mod").to_string();
             return;
         };
-        self.request_update_indices(vec![index], false);
+        self.request_update_indices(vec![index], false, self.force_update_enabled);
     }
 
     fn start_auto_update(&mut self) {
         let indices = self.auto_update_indices();
         if !indices.is_empty() {
-            self.request_update_indices(indices, false);
+            self.request_update_indices(indices, false, false);
         }
     }
 
-    fn request_update_indices(&mut self, indices: Vec<usize>, confirmed_local_newer: bool) {
+    fn request_update_indices(
+        &mut self,
+        indices: Vec<usize>,
+        confirmed_local_newer: bool,
+        force_update: bool,
+    ) {
         let indices = self.valid_update_indices(indices);
         if indices.is_empty() {
             self.status_message = self.t("no_updates").to_string();
@@ -528,11 +538,14 @@ impl PatcherApp {
                     })
             })
         {
-            self.pending_confirmation = Some(PendingConfirmation { indices });
+            self.pending_confirmation = Some(PendingConfirmation {
+                indices,
+                force_update,
+            });
             return;
         }
 
-        self.start_patching_indices(indices, confirmed_local_newer);
+        self.start_patching_indices(indices, confirmed_local_newer, force_update);
     }
 
     fn valid_update_indices(&self, indices: Vec<usize>) -> Vec<usize> {
@@ -548,13 +561,28 @@ impl PatcherApp {
             .collect()
     }
 
-    fn update_all_indices(&self) -> Vec<usize> {
+    fn update_all_indices(&self, force_update: bool) -> Vec<usize> {
+        self.update_all_eligible_indices()
+            .into_iter()
+            .filter(|index| {
+                force_update
+                    || self
+                        .available_mods
+                        .get(*index)
+                        .is_some_and(|installed_mod| {
+                            installed_mod.update_status.is_update_candidate()
+                        })
+            })
+            .collect()
+    }
+
+    fn update_all_eligible_indices(&self) -> Vec<usize> {
         self.available_mods
             .iter()
             .enumerate()
             .filter_map(|(index, installed_mod)| {
                 let workshop_id = valid_workshop_id(installed_mod.workshop_id?)?;
-                (workshop_id > 0 && installed_mod.update_status.is_update_candidate())
+                (workshop_id > 0 && !self.auto_update_exclusions.contains(&workshop_id))
                     .then_some(index)
             })
             .collect()
@@ -586,7 +614,12 @@ impl PatcherApp {
         let _ = save_auto_update_exclusions(&self.auto_update_exclusions);
     }
 
-    fn start_patching_indices(&mut self, indices: Vec<usize>, allow_downgrade: bool) {
+    fn start_patching_indices(
+        &mut self,
+        indices: Vec<usize>,
+        allow_downgrade: bool,
+        force_update: bool,
+    ) {
         let mut groups: Vec<UpdateGroup> = Vec::new();
         for index in indices {
             let Some(installed_mod) = self.available_mods.get(index) else {
@@ -644,6 +677,9 @@ impl PatcherApp {
             l.clear();
             l.push(format!("Update count: {}", target_count));
             l.push(format!("Unique Workshop items: {}", group_count));
+            if force_update {
+                l.push("Force update enabled: all files will be verified.".to_string());
+            }
             l.push("Running updates asynchronously.".to_string());
         }
 
@@ -671,7 +707,8 @@ impl PatcherApp {
                     let client = SteamWorkshopClient::new(app_id, group.workshop_id)
                         .with_steam_library_roots(steam_library_roots)
                         .with_steam_client_download_wait(steam_client_wait)
-                        .with_steamcmd_lock(steamcmd_lock);
+                        .with_steamcmd_lock(steamcmd_lock)
+                        .with_force_download(force_update);
 
                     let download_log = log.clone();
                     let download_label = format!("Workshop {}", group.workshop_id);
@@ -703,7 +740,8 @@ impl PatcherApp {
                         }
 
                         let patcher = Patcher::new(client.clone(), target.path)
-                            .allow_downgrade(allow_downgrade);
+                            .allow_downgrade(allow_downgrade)
+                            .force_update(force_update);
                         let log_for_logger = log.clone();
                         let display_name = target.display_name.clone();
                         let logger = move |msg: String| {
@@ -1314,23 +1352,50 @@ impl PatcherApp {
                     if ui
                         .add_enabled(
                             self.can_start_update(),
-                            egui::Button::new(self.t("download_apply"))
-                                .min_size([220.0, 40.0].into()),
+                            update_action_button(
+                                self.t("download_apply"),
+                                220.0,
+                                self.force_update_enabled,
+                            ),
                         )
                         .clicked()
                     {
                         self.start_patching();
                     }
 
-                    let update_all_indices = self.update_all_indices();
+                    let can_update_all = !self.update_all_eligible_indices().is_empty();
+                    let update_all_indices = self.update_all_indices(self.force_update_enabled);
                     if ui
                         .add_enabled(
-                            !update_all_indices.is_empty(),
-                            egui::Button::new(self.t("update_all")).min_size([160.0, 40.0].into()),
+                            can_update_all,
+                            update_action_button(
+                                self.t("update_all"),
+                                160.0,
+                                self.force_update_enabled,
+                            ),
                         )
                         .clicked()
                     {
-                        self.request_update_indices(update_all_indices, false);
+                        if update_all_indices.is_empty() {
+                            self.status_message = self.t("no_updates").to_string();
+                        } else {
+                            self.request_update_indices(
+                                update_all_indices,
+                                false,
+                                self.force_update_enabled,
+                            );
+                        }
+                    }
+
+                    let mut force_update_enabled = self.force_update_enabled;
+                    if ui
+                        .checkbox(&mut force_update_enabled, self.t("force_update"))
+                        .changed()
+                    {
+                        self.force_update_enabled = force_update_enabled;
+                        if force_update_enabled {
+                            self.show_force_update_notice = true;
+                        }
                     }
                 });
             }
@@ -1408,7 +1473,7 @@ impl PatcherApp {
             self.pending_confirmation = None;
         } else if confirm {
             self.pending_confirmation = None;
-            self.request_update_indices(pending.indices, true);
+            self.request_update_indices(pending.indices, true, pending.force_update);
         }
     }
 
@@ -1448,6 +1513,30 @@ impl PatcherApp {
 
         if close {
             self.pending_subscribe_notice = None;
+        }
+    }
+
+    fn render_force_update_notice_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_force_update_notice {
+            return;
+        }
+
+        let mut close = false;
+        let language = self.language();
+        egui::Window::new(tr(language, "force_update_title"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(tr(language, "force_update_body"));
+                ui.add_space(8.0);
+                if ui.button(tr(language, "ok")).clicked() {
+                    close = true;
+                }
+            });
+
+        if close {
+            self.show_force_update_notice = false;
         }
     }
 
@@ -1724,6 +1813,7 @@ impl eframe::App for PatcherApp {
 
         self.render_confirmation_dialog(ctx);
         self.render_subscribe_notice_dialog(ctx);
+        self.render_force_update_notice_dialog(ctx);
         self.render_dependency_check_dialog(ctx);
     }
 }
@@ -1932,6 +2022,17 @@ fn render_description_text_box(
                     ui.add(egui::Label::new(text).wrap(true));
                 });
         });
+}
+
+fn update_action_button(label: &str, width: f32, force_update: bool) -> egui::Button<'_> {
+    let button = if force_update {
+        egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE))
+            .fill(egui::Color32::from_rgb(190, 55, 55))
+    } else {
+        egui::Button::new(label)
+    };
+
+    button.min_size([width, 40.0].into())
 }
 
 fn dependency_status_color(ok: bool) -> egui::Color32 {
@@ -2168,6 +2269,9 @@ fn tr(language: UiLanguage, key: &'static str) -> &'static str {
             "open_web_page" => "웹 페이지 열기",
             "download_apply" => "다운로드 & 적용",
             "update_all" => "모두 업데이트",
+            "force_update" => "강제 업데이트",
+            "force_update_title" => "강제 업데이트",
+            "force_update_body" => "파일을 전부 다시 확인합니다. 최신으로 표시된 모드도 Workshop 파일과 비교한 뒤 필요한 파일을 다시 적용합니다.",
             "downloading_applying" => "Workshop 파일을 다운로드하고 적용하는 중...",
             "log" => "로그:",
             "select_mod" => "모드를 선택하세요.",
@@ -2270,6 +2374,9 @@ fn tr(language: UiLanguage, key: &'static str) -> &'static str {
             "open_web_page" => "Open Web Page",
             "download_apply" => "Download & Apply",
             "update_all" => "Update All",
+            "force_update" => "Force update",
+            "force_update_title" => "Force Update",
+            "force_update_body" => "All files will be checked again. Mods marked as latest will still be compared against Workshop files and reapplied where needed.",
             "downloading_applying" => "Downloading and applying workshop files...",
             "log" => "Log:",
             "select_mod" => "Select a mod.",

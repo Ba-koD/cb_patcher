@@ -15,6 +15,7 @@ struct LocalMetadata {
 pub struct Patcher {
     mod_path: PathBuf,
     allow_downgrade: bool,
+    force_update: bool,
 }
 
 impl Patcher {
@@ -22,11 +23,17 @@ impl Patcher {
         Self {
             mod_path,
             allow_downgrade: false,
+            force_update: false,
         }
     }
 
     pub fn allow_downgrade(mut self, allow_downgrade: bool) -> Self {
         self.allow_downgrade = allow_downgrade;
+        self
+    }
+
+    pub fn force_update(mut self, force_update: bool) -> Self {
+        self.force_update = force_update;
         self
     }
 
@@ -86,9 +93,19 @@ impl Patcher {
             .and_then(|metadata| normalize_version(metadata.version.as_deref()));
 
         match (local_version.as_deref(), workshop_version.as_deref()) {
-            (Some(local), Some(remote)) if local == remote => {
+            (Some(local), Some(remote)) if local == remote && !self.force_update => {
                 log(logger, format!("Already up to date (version {}).", local));
                 Ok(())
+            }
+            (Some(local), Some(remote)) if local == remote => {
+                log(
+                    logger,
+                    format!(
+                        "Force update enabled: verifying all files for version {}.",
+                        local
+                    ),
+                );
+                self.sync_from_dir(workshop_path, logger)
             }
             (Some(local), Some(remote))
                 if !self.allow_downgrade

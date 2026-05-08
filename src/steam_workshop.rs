@@ -25,6 +25,7 @@ pub struct SteamWorkshopClient {
     steam_library_roots: Vec<PathBuf>,
     steam_client_download_wait: Duration,
     steamcmd_lock: Option<Arc<Mutex<()>>>,
+    force_download: bool,
 }
 
 impl SteamWorkshopClient {
@@ -35,6 +36,7 @@ impl SteamWorkshopClient {
             steam_library_roots: Vec::new(),
             steam_client_download_wait: DEFAULT_STEAM_CLIENT_DOWNLOAD_WAIT,
             steamcmd_lock: None,
+            force_download: false,
         }
     }
 
@@ -53,23 +55,35 @@ impl SteamWorkshopClient {
         self
     }
 
+    pub fn with_force_download(mut self, force_download: bool) -> Self {
+        self.force_download = force_download;
+        self
+    }
+
     pub fn download_latest(&self, logger: Option<&dyn Fn(String)>) -> Result<PathBuf> {
-        if let Some(path) =
-            find_cached_workshop_item(self.app_id, self.workshop_id, &self.steam_library_roots)
-        {
+        if !self.force_download {
+            if let Some(path) =
+                find_cached_workshop_item(self.app_id, self.workshop_id, &self.steam_library_roots)
+            {
+                log(
+                    logger,
+                    format!(
+                        "Using Steam client workshop cache: {}",
+                        path.to_string_lossy()
+                    ),
+                );
+                return Ok(path);
+            }
+        } else {
             log(
                 logger,
-                format!(
-                    "Using Steam client workshop cache: {}",
-                    path.to_string_lossy()
-                ),
+                "Force update enabled; refreshing Workshop content before applying.".to_string(),
             );
-            return Ok(path);
         }
 
         log(
             logger,
-            "Steam client cache was not found; trying SteamCMD anonymous fallback...".to_string(),
+            "Trying SteamCMD anonymous workshop download...".to_string(),
         );
         let anonymous_failed = {
             let _steamcmd_guard = self
