@@ -12,6 +12,8 @@ use serde::Deserialize;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{mpsc, Arc, Mutex};
@@ -1159,7 +1161,20 @@ impl PatcherApp {
             .spacing([10.0, 6.0])
             .show(ui, |ui| {
                 ui.label(self.t("folder"));
-                ui.label(&selected.folder_name);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(&selected.folder_name);
+                    if ui.button(self.t("open_folder")).clicked() {
+                        match open_folder(&selected.path) {
+                            Ok(()) => {
+                                self.status_message = self.t("opened_folder").to_string();
+                            }
+                            Err(error) => {
+                                self.status_message =
+                                    format!("{}: {}", self.t("open_folder_failed"), error);
+                            }
+                        }
+                    }
+                });
                 ui.end_row();
 
                 ui.label(self.t("local_version"));
@@ -2444,6 +2459,7 @@ fn tr(language: UiLanguage, key: &'static str) -> &'static str {
             "no_workshop_id_meta" => "metadata.xml에 Workshop ID가 없습니다.",
             "retry_details" => "상세정보 다시 불러오기",
             "open_workshop_steam" => "Steam에서 Workshop 열기",
+            "open_folder" => "폴더 열기",
             "loading_details" => "Workshop 상세정보 불러오는 중...",
             "preview_unsupported" => "지원하지 않는 이미지 형식의 미리보기입니다.",
             "steam_updated" => "Steam 업데이트",
@@ -2459,6 +2475,7 @@ fn tr(language: UiLanguage, key: &'static str) -> &'static str {
             "tags" => "태그",
             "opened_steam" => "Steam에서 Workshop 페이지를 열었습니다.",
             "opened_profile" => "Steam에서 제작자 프로필을 열었습니다.",
+            "opened_folder" => "폴더를 열었습니다.",
             "open_web_page" => "웹 페이지 열기",
             "download_apply" => "다운로드 & 적용",
             "update_all" => "모두 업데이트",
@@ -2496,6 +2513,7 @@ fn tr(language: UiLanguage, key: &'static str) -> &'static str {
             "workshop_details_failed" => "Workshop 상세정보를 불러오지 못했습니다",
             "open_workshop_failed" => "Steam Workshop 페이지를 열지 못했습니다",
             "open_profile_failed" => "Steam 프로필을 열지 못했습니다",
+            "open_folder_failed" => "폴더를 열지 못했습니다",
             _ => key,
         },
         UiLanguage::English => match key {
@@ -2552,6 +2570,7 @@ fn tr(language: UiLanguage, key: &'static str) -> &'static str {
             "no_workshop_id_meta" => "This mod has no Workshop ID in metadata.xml.",
             "retry_details" => "Retry Details",
             "open_workshop_steam" => "Open Workshop in Steam",
+            "open_folder" => "Open Folder",
             "loading_details" => "Loading Workshop details...",
             "preview_unsupported" => "Preview is not a supported image format.",
             "steam_updated" => "Steam Updated",
@@ -2567,6 +2586,7 @@ fn tr(language: UiLanguage, key: &'static str) -> &'static str {
             "tags" => "Tags",
             "opened_steam" => "Opened Workshop page in Steam.",
             "opened_profile" => "Opened creator profile in Steam.",
+            "opened_folder" => "Opened folder.",
             "open_web_page" => "Open Web Page",
             "download_apply" => "Download & Apply",
             "update_all" => "Update All",
@@ -2604,6 +2624,7 @@ fn tr(language: UiLanguage, key: &'static str) -> &'static str {
             "workshop_details_failed" => "Failed to load Workshop details",
             "open_workshop_failed" => "Could not open Steam Workshop page",
             "open_profile_failed" => "Could not open Steam profile",
+            "open_folder_failed" => "Could not open folder",
             _ => key,
         },
     }
@@ -2680,6 +2701,33 @@ fn open_workshop_in_steam(workshop_id: u64) -> anyhow::Result<()> {
 
 fn open_steam_profile_url(profile_url: &str) -> anyhow::Result<()> {
     open_steam_or_web(profile_url)
+}
+
+fn open_folder(path: &Path) -> anyhow::Result<()> {
+    if !path.is_dir() {
+        anyhow::bail!("Folder does not exist: {}", path.display());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let path_arg = path.to_string_lossy().replace('/', "\\");
+        Command::new("explorer.exe")
+            .raw_arg(format!("\"{}\"", path_arg))
+            .spawn()?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn()?;
+        return Ok(());
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(path).spawn()?;
+        return Ok(());
+    }
 }
 
 fn open_steam_or_web(web_url: &str) -> anyhow::Result<()> {
